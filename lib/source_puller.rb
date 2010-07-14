@@ -1,132 +1,126 @@
 require File.dirname(__FILE__) + '/output'
 require File.dirname(__FILE__) + '/puller'
+require File.dirname(__FILE__) + '/data_fetcher'
 
-gem 'kronos', '>= 0.1.6'
-require 'kronos'
 require 'uri'
+
+class Time
+  def to_hash
+    { 
+      :year  => self.year,
+      :month => self.month,
+      :day   => self.day,
+    }
+  end
+end
 
 class SourcePuller 
   U = DataCatalog::ImporterFramework::Utility
 
-  def initialize(uri, force_fetch)
+  def initialize(uri)
     @metadata_master = []
-    @base           = "http://data.seattle.gov/"
-    @force_fetch    = force_fetch
-    @page_number    = 1
-    @base_uri       = uri
-    @next           = uri
-    @index_html     = Output.file '/../cache/raw/source/index.html'
-    parse_all_pages
-  end
-
-  protected
-
-  def parse_all_pages
-    parse_page(@base_uri + "&page=19")
-    #metadata = parse_page(@next) while @next
-  end
-
-  def parse_page(url)
-    filized_url = url.gsub("http://","")
-    filized_url = filized_url.scan(/.*?\//).first
-    filized_url.chop!
-    output_file = Output.file '/../cache/raw/source/' + filized_url
-    doc = U.parse_html_from_file_or_uri(url, output_file, 
-                                             :force_fetch => @force_fetch)
-
-    set_next(doc)
-
-    rows = doc.xpath("//li//div[@class='itemActionContainer']//ul")
-    rows.each do | row |
-      li_tag = row.css("li").first
-      a_tag = li_tag.css("a").first
-      link = a_tag["href"]
-      parse_single_source(link)
-    end
-  end
-
-  def set_next(document)
-    pages = document.xpath("//div[@class='pagination']")
-    last_link = pages.css("a").last
-    @page_number += 1
-    debugger
-    if last_link.inner_text == "Next"
-      @next = @base_uri + "&page=#{@page_number}"
-    else
-      @next = nil
-    end
-  end
-
-  def parse_single_source(uri)
-    
+    @org_data_master = []
+    @base_uri        = uri
+    @base            = 'http://data.seattle.gov/'
   end
 
   def get_metadata
-	  table_rows = doc.xpath("//table//tr")
-
-	  metadata = []
-	  table_rows.delete(table_rows[0])
-	  table_rows.each do | row |
-		  formats = { :downloads => {}, :source => {} }
-		  cells = row.css("td")
-
-      format_cells = 2..5
-      format_cells.each do | x |
-        add_format(formats, cells[x].inner_text, cells[x])
-      end
-
-		metadata << {
-			:title        => cells[0].inner_text,
-			:description  => U.multi_line_clean(cells[1].inner_text),
-			:formats      => formats
-		}
-	  end
-	metadata
+    df = DataFetcher.new(@base_uri)
+    unformatted_metadata = df.fetch_json
+    format_metadata(unformatted_metadata)
   end
 
-	def parse_metadata(metadata)
-    source = metadata[:formats][:source]
-		m = {
-        :title        => metadata[:title],
-        :description  => metadata[:description],
+  def format_metadata(metadata)
+    metadata.each do | data |
+      org_type = data["category"]
+      title = data["name"]
+      id = data["id"]
+      url = @base + org_type + "/" + title.gsub(" ", "-") + "/" + id
+      release_date = Time.at(data["createdAt"])
+      cc_license = data["license"]
+
+      if cc_license
+        license = cc_license["name"]
+        license_url = cc_license["termsLink"]
+      else
+        license = "Public Domain"
+        license_url = nil
+      end
+
+      m = {
+        :title        => title,
         :source_type  => "dataset",
-        :catalog_name => "utah.gov",
+        :catalog_name => "Seattle Data Catalog",
         :catalog_url  => @base_uri,
-        :url          => source[:source_url],
-        :frequency    => "unknown"
-		  }
-    downloads = []
-    metadata[:formats][:downloads].each do | key, value |
-			downloads << { :url => value[:href], :format => key }
+        :url          => url,
+        :released     => release_date.to_hash,
+        :license     => license,
+        :frequency    => "unknown",
+      }
+
+      m[:license_url] = license_url if license_url
+
+      org_name = data["owner"]["displayName"]
+      org_url = @base + "profile/" + org_name.gsub(" ","-") + "/" + data["owner"]["id"]
+      org_data = {
+        :home_url => org_url,
+        :name     => org_name,
+      }
+
+      description = data["description"]
+      m[:description] = U.multi_line_clean(description) if description
+
+      m[:organization] = org_data
+
+      add_org_to_master(org_data, org_type)
+
+      download_types = ["csv", "pdf", "xls", "xml", "xlsl", "json"]
+      downloads = []
+      download_types.each do | download_type |
+        url = "http://data.seattle.gov/views/#{id}/rows.#{download_type}?accessType=DOWNLOAD"
+        downloads << {
+          :url => url,
+          :format => download_type.upcase,
+        }
+      end
+      m[:downloads] = downloads
+
+      #Custom fields
+      tags = data["tags"]
+      add_to_custom(m, "tags", "tags for the record", "Array", tags) if tags
+      last_modified = Time.at(data["viewLastModified"])
+      add_to_custom(m, "last modified", 
+                    "Last time the record was modified", "Hash", 
+                    last_modified.to_hash)
+      @metadata_master << m
     end
+    @metadata_master
+  end
 
-    m[:organization] = { :url  => source[:source_url],
-                         :name => source[:source_org] }
+  def get_org_data
+    @org_data_master
+  end
 
-    m[:downloads] = downloads
-    m
-	end
+  private
 
-  private 
+  def add_to_custom(metadata, label, description, type, value)
+    if metadata[:custom].nil?
+      metadata[:custom] = {}
+    end
+    num = metadata[:custom].size.to_s
+    metadata[:custom][num] = { :label => label,
+                               :description => description,
+                               :type  => type, :value => value}
+  end
 
-  def add_format(formats, label, node)
-	  a_tag = node.css("a").first
-	  if a_tag
-		  link = a_tag["href"]
-
-		  #strip http:// out to make the next regex simpler
-		  plain_link = link.gsub("http://", "")
-		  #Only go to the first /
-		  source_link = plain_link.scan(/.*?\//).first
-		  	
-		  formats[:source][:source_url] = "http://" + source_link.chop!
-		  formats[:source][:source_org] = source_link
-
-      #Add http:// back in
-      link = "http://" + plain_link 
-		  formats[:downloads][label] = { :href => link }
-
-	  end
+  def add_org_to_master(org_data, org_type)
+    already_exists = @org_data_master.find do | data | 
+      data[:home_url] == org_data[:home_url]
+    end
+    
+    unless already_exists
+      @org_data_master << org_data.merge({ :org_type => org_type }) 
+    end
   end
 
 end
