@@ -32,10 +32,10 @@ class SourcePuller
 
   def format_metadata(metadata)
     metadata.each do | data |
-      org_type = data["category"]
+      category = data["category"]
       title = data["name"]
       id = data["id"]
-      url = @base + org_type + "/" + title.gsub(" ", "-") + "/" + id
+      url = @base + category + "/" + title.gsub(" ", "-") + "/" + id
       release_date = Time.at(data["createdAt"])
       cc_license = data["license"]
 
@@ -50,11 +50,9 @@ class SourcePuller
       m = {
         :title        => title,
         :source_type  => "dataset",
-        :catalog_name => "Seattle Data Catalog",
-        :catalog_url  => @base_uri,
         :url          => url,
         :released     => release_date.to_hash,
-        :license     => license,
+        :license      => license,
         :frequency    => "unknown",
       }
 
@@ -63,7 +61,7 @@ class SourcePuller
       org_name = data["owner"]["displayName"]
       org_url = @base + "profile/" + org_name.gsub(" ","-") + "/" + data["owner"]["id"]
       org_data = {
-        :home_url => org_url,
+        :url      => org_url,
         :name     => org_name,
       }
 
@@ -72,7 +70,7 @@ class SourcePuller
 
       m[:organization] = org_data
 
-      add_org_to_master(org_data, org_type)
+      add_org_to_master(org_data)
 
       download_types = ["csv", "pdf", "xls", "xml", "xlsl", "json"]
       downloads = []
@@ -113,13 +111,13 @@ class SourcePuller
                                :type  => type, :value => value}
   end
 
-  def add_org_to_master(org_data, org_type)
+  def add_org_to_master(org_data)
     already_exists = @org_data_master.find do | data | 
-      data[:home_url] == org_data[:home_url]
+      data[:url] == org_data[:url]
     end
     
     unless already_exists
-      @org_data_master << org_data.merge({ :org_type => org_type }) 
+      @org_data_master << org_data
     end
   end
 

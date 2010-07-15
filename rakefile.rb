@@ -14,8 +14,8 @@ def setup
     :api_key      => config[env]['api_key'],
     :base_uri     => config[env]['base_uri'],
     :cache_folder => File.dirname(__FILE__) + '/cache/parsed',
-    :name         => "Utah State Data Catalog",
-    :uri          => "http://www.utah.gov/data/state_data_files.html",
+    :name         => "Seattle Data Catalog",
+    :uri          => "http://data.seattle.gov/#type=all",
     :puller	      =>  Puller,
   })
 end
